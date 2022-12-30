@@ -207,20 +207,23 @@ func (cfg *Engine) WsRemote() {
 }
 
 type socketIOWriter struct {
-	Url string // 定义哪个接口上报的数据;
+	Url    string // 定义哪个接口上报的数据;
+	Secret string //
 	myResponseWriter
 	*gosocketio.Channel
 }
 
 type IOData struct {
-	Type string `json:"type"`
-	Data string `json:"data"`
+	Type   string `json:"type"`
+	Data   string `json:"data"`
+	Secret string `json:"secret"`
 }
 
 func (w *socketIOWriter) Write(b []byte) (int, error) {
 	data := IOData{
-		Type: w.Url,
-		Data: string(b),
+		Secret: w.Secret,
+		Type:   w.Url,
+		Data:   string(b),
 	}
 	result, err := json.Marshal(data)
 	if err == nil {
@@ -237,8 +240,10 @@ func (w *socketIOWriter) WriteHeartbeat(secret string) error {
 var ticker = time.NewTicker(time.Second * 3)
 
 const (
-	webSocketProtocol = "ws://"
-	socketioUrl       = "/socket.io/?EIO=3&transport=websocket&secret="
+	webSocketProtocol  = "ws://"
+	socketioUrl        = "/socket.io/?EIO=3&transport=websocket&secret="
+	msgDelayTime       = 3
+	reConnectDelayTime = 10
 )
 
 // SocketIORemote SocketIO的双向通信；
@@ -259,7 +264,7 @@ func (cfg *Engine) SocketIORemote() {
 		if err != nil {
 			log.Error("connect to console server ", cfg.Server, " ", err)
 			// 链接失败，5s后重试；
-			time.Sleep(time.Second * 5)
+			time.Sleep(time.Second * reConnectDelayTime)
 			continue
 		} else {
 			c.On(gosocketio.OnConnection, func(h *gosocketio.Channel) {
@@ -267,12 +272,11 @@ func (cfg *Engine) SocketIORemote() {
 				wr := &socketIOWriter{Channel: h}
 				// 监听并处理消息请求；
 				go MessageHandler(c, cfg, wr)
-				ticker.Reset(time.Second * 5)
+				ticker.Reset(time.Second * msgDelayTime)
 				// 启动协程与服务端维持心跳；
 				go func() {
 					for range ticker.C {
 						// 向服务端发送心跳请求
-						log.Info("write heartbeat ", cfg.Server, " success")
 						wr.WriteHeartbeat(cfg.Secret)
 					}
 				}()
@@ -299,6 +303,7 @@ func MessageHandler(c *gosocketio.Client, cfg *Engine, writer *socketIOWriter) {
 					req, _ := http.NewRequest("GET", socketMsg.Data["url"].(string), nil)
 					http, _ := cfg.mux.Handler(req)
 					writer.Url = url
+					writer.Secret = cfg.Secret
 					http.ServeHTTP(writer, req)
 				}
 			}
@@ -309,7 +314,7 @@ func MessageHandler(c *gosocketio.Client, cfg *Engine, writer *socketIOWriter) {
 		log.Error("server disconnection ", cfg.Server, "")
 		ticker.Stop()
 		writer.Close()
-		time.AfterFunc(time.Second*10, func() {
+		time.AfterFunc(time.Second*reConnectDelayTime, func() {
 			go cfg.SocketIORemote()
 		})
 	})
@@ -318,7 +323,7 @@ func MessageHandler(c *gosocketio.Client, cfg *Engine, writer *socketIOWriter) {
 		log.Error("server OnError ", cfg.Server, "")
 		ticker.Stop()
 		writer.Close()
-		time.AfterFunc(time.Second*10, func() {
+		time.AfterFunc(time.Second*reConnectDelayTime, func() {
 			go cfg.SocketIORemote()
 		})
 	})
