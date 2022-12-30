@@ -9,7 +9,6 @@ import (
 	"m7s.live/engine/v4/log"
 	"m7s.live/engine/v4/util"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -208,32 +207,53 @@ func (cfg *Engine) WsRemote() {
 }
 
 type socketIOWriter struct {
+	Url string // 定义哪个接口上报的数据;
 	myResponseWriter
 	*gosocketio.Channel
 }
 
-func (w *socketIOWriter) Write(b []byte) (int, error) {
-	return len(b), w.Emit("message", string(b))
+type IOData struct {
+	Type string `json:"type"`
+	Data string `json:"data"`
 }
 
-func (w *socketIOWriter) WriteHeartbeat(secrect string) error {
-	return w.Emit("heartbeat", secrect)
+func (w *socketIOWriter) Write(b []byte) (int, error) {
+	data := IOData{
+		Type: w.Url,
+		Data: string(b),
+	}
+	result, err := json.Marshal(data)
+	if err == nil {
+		return len(result), w.Emit("message", string(result))
+	} else {
+		return -1, nil
+	}
+}
+
+func (w *socketIOWriter) WriteHeartbeat(secret string) error {
+	return w.Emit("heartbeat", secret)
 }
 
 var ticker = time.NewTicker(time.Second * 3)
+
+const (
+	webSocketProtocol = "ws://"
+	socketioUrl       = "/socket.io/?EIO=3&transport=websocket&secret="
+)
 
 // SocketIORemote SocketIO的双向通信；
 func (cfg *Engine) SocketIORemote() {
 	for {
 		server := strings.Split(strings.TrimPrefix(cfg.Server, "socket.io://"), ":")
-		port := 48088
+		port := "48088"
 		if len(server) == 2 {
-			port, _ = strconv.Atoi(server[1])
+			port = server[1]
 		} else {
 			panic("url config error")
 		}
+		url := webSocketProtocol + server[0] + ":" + port + socketioUrl + cfg.Secret
 		c, err := gosocketio.Dial(
-			gosocketio.GetUrl(server[0], port, false),
+			url,
 			transport.GetDefaultWebsocketTransport(),
 		)
 		if err != nil {
@@ -278,6 +298,7 @@ func MessageHandler(c *gosocketio.Client, cfg *Engine, writer *socketIOWriter) {
 				if url != "" {
 					req, _ := http.NewRequest("GET", socketMsg.Data["url"].(string), nil)
 					http, _ := cfg.mux.Handler(req)
+					writer.Url = url
 					http.ServeHTTP(writer, req)
 				}
 			}
@@ -288,14 +309,18 @@ func MessageHandler(c *gosocketio.Client, cfg *Engine, writer *socketIOWriter) {
 		log.Error("server disconnection ", cfg.Server, "")
 		ticker.Stop()
 		writer.Close()
-		go cfg.SocketIORemote()
+		time.AfterFunc(time.Second*10, func() {
+			go cfg.SocketIORemote()
+		})
 	})
 
 	c.On(gosocketio.OnError, func(h *gosocketio.Channel) {
 		log.Error("server OnError ", cfg.Server, "")
 		ticker.Stop()
 		writer.Close()
-		go cfg.SocketIORemote()
+		time.AfterFunc(time.Second*10, func() {
+			go cfg.SocketIORemote()
+		})
 	})
 }
 
