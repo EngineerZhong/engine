@@ -40,10 +40,13 @@ func (s Subscribers) Delete(suber ISubscriber) {
 }
 
 func (s Subscribers) Add(suber ISubscriber, wait *waitTracks) {
-	s[suber] = wait
+	if s != nil {
+		s[suber] = wait
+	}
 	io := suber.GetSubscriber()
 	io.Info("suber +1", zap.Int("remains", len(s)))
 	if config.Global.EnableSubEvent {
+		io.Info("config.Global.EnableSubEvent", zap.Bool("event", config.Global.EnableSubEvent))
 		EventBus <- suber
 	}
 }

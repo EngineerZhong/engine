@@ -2,13 +2,16 @@ package config
 
 import (
 	"context"
-	"net/http"
-	"strings"
-	"time"
-
+	"encoding/json"
+	"github.com/graarh/golang-socketio"
+	"github.com/graarh/golang-socketio/transport"
 	"golang.org/x/net/websocket"
 	"m7s.live/engine/v4/log"
 	"m7s.live/engine/v4/util"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 )
 
 type PublishConfig interface {
@@ -147,6 +150,7 @@ type myWsWriter struct {
 func (w *myWsWriter) Write(b []byte) (int, error) {
 	return len(b), websocket.Message.Send(w.Conn, b)
 }
+
 func (cfg *Engine) WsRemote() {
 	for {
 		conn, err := websocket.Dial(cfg.Server, "", "https://console.monibuca.com")
@@ -203,12 +207,106 @@ func (cfg *Engine) WsRemote() {
 	}
 }
 
+type socketIOWriter struct {
+	myResponseWriter
+	*gosocketio.Channel
+}
+
+func (w *socketIOWriter) Write(b []byte) (int, error) {
+	return len(b), w.Emit("message", string(b))
+}
+
+func (w *socketIOWriter) WriteHeartbeat(secrect string) error {
+	return w.Emit("heartbeat", secrect)
+}
+
+var ticker = time.NewTicker(time.Second * 3)
+
+// SocketIORemote SocketIO的双向通信；
+func (cfg *Engine) SocketIORemote() {
+	for {
+		server := strings.Split(strings.TrimPrefix(cfg.Server, "socket.io://"), ":")
+		port := 48088
+		if len(server) == 2 {
+			port, _ = strconv.Atoi(server[1])
+		} else {
+			panic("url config error")
+		}
+		c, err := gosocketio.Dial(
+			gosocketio.GetUrl(server[0], port, false),
+			transport.GetDefaultWebsocketTransport(),
+		)
+		if err != nil {
+			log.Error("connect to console server ", cfg.Server, " ", err)
+			// 链接失败，5s后重试；
+			time.Sleep(time.Second * 5)
+			continue
+		} else {
+			c.On(gosocketio.OnConnection, func(h *gosocketio.Channel) {
+				log.Info("connect to console server ", cfg.Server, " success")
+				wr := &socketIOWriter{Channel: h}
+				// 监听并处理消息请求；
+				go MessageHandler(c, cfg, wr)
+				ticker.Reset(time.Second * 5)
+				// 启动协程与服务端维持心跳；
+				go func() {
+					for range ticker.C {
+						// 向服务端发送心跳请求
+						log.Info("write heartbeat ", cfg.Server, " success")
+						wr.WriteHeartbeat(cfg.Secret)
+					}
+				}()
+			})
+			break
+		}
+	}
+}
+
+// SocketMsg 消息体
+type SocketMsg struct {
+	Ack  int                    `json:"ack"`
+	Data map[string]interface{} `json:"data"`
+}
+
+// MessageHandler 消息处理函数
+func MessageHandler(c *gosocketio.Client, cfg *Engine, writer *socketIOWriter) {
+	c.On("res", func(h *gosocketio.Channel, msg string) {
+		socketMsg := &SocketMsg{}
+		if err := json.Unmarshal([]byte(msg), socketMsg); err == nil {
+			if _, found := socketMsg.Data["url"]; found {
+				url := socketMsg.Data["url"].(string)
+				if url != "" {
+					req, _ := http.NewRequest("GET", socketMsg.Data["url"].(string), nil)
+					http, _ := cfg.mux.Handler(req)
+					http.ServeHTTP(writer, req)
+				}
+			}
+			log.Infof("msg:%+v ", socketMsg)
+		}
+	})
+	c.On(gosocketio.OnDisconnection, func(h *gosocketio.Channel) {
+		log.Error("server disconnection ", cfg.Server, "")
+		ticker.Stop()
+		writer.Close()
+		go cfg.SocketIORemote()
+	})
+
+	c.On(gosocketio.OnError, func(h *gosocketio.Channel) {
+		log.Error("server OnError ", cfg.Server, "")
+		ticker.Stop()
+		writer.Close()
+		go cfg.SocketIORemote()
+	})
+}
+
 func (cfg *Engine) OnEvent(event any) {
 	switch v := event.(type) {
 	case context.Context:
 		util.RTPReorderBufferLen = uint16(cfg.RTPReorderBufferLen)
 		if strings.HasPrefix(cfg.Console.Server, "wss") {
 			go cfg.WsRemote()
+		} else if strings.HasPrefix(cfg.Console.Server, "socket.io") {
+			go cfg.SocketIORemote()
 		} else {
 			go cfg.Remote(v)
 		}
