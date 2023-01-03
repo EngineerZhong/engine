@@ -26,6 +26,7 @@ func (p *流速控制) 时间戳差(绝对时间戳 uint32) time.Duration {
 }
 func (p *流速控制) 控制流速(绝对时间戳 uint32) {
 	数据时间差, 实际时间差 := p.时间戳差(绝对时间戳), time.Since(p.起始时间)
+	// println("数据时间差", 数据时间差, "实际时间差", 实际时间差, "绝对时间戳", 绝对时间戳, "起始时间戳", p.起始时间戳, "起始时间", p.起始时间.Format("2006-01-02 15:04:05"))
 	// if 实际时间差 > 数据时间差 {
 	// 	p.重置(绝对时间戳)
 	// 	return
@@ -57,10 +58,27 @@ func (av *Media[T]) SetSpeedLimit(value int) {
 	av.等待上限 = time.Duration(value)
 }
 
-func (av *Media[T]) Init(n int) {
-	av.AVRing.Init(n)
-	av.SSRC = uint32(uintptr(unsafe.Pointer(av)))
-	av.等待上限 = time.Duration(config.Global.SpeedLimit)
+func (av *Media[T]) SetStuff(stuff ...any) {
+	for _, s := range stuff {
+		switch v := s.(type) {
+		case time.Duration:
+			av.Poll = v
+		case string:
+			av.Name = v
+		case int:
+			av.AVRing.Init(v)
+			av.SSRC = uint32(uintptr(unsafe.Pointer(av)))
+			av.等待上限 = time.Duration(config.Global.SpeedLimit)
+		case uint32:
+			av.SampleRate = v
+		case byte:
+			av.DecoderConfiguration.PayloadType = v
+		case IStream:
+			av.Stream = v
+		case RTPWriter:
+			av.RTPWriter = v
+		}
+	}
 }
 
 func (av *Media[T]) LastWriteTime() time.Time {
@@ -119,6 +137,7 @@ func (av *Media[T]) Flush() {
 		av.重置(curValue.AbsTime)
 	} else {
 		curValue.DeltaTime = (curValue.DTS - preValue.DTS) / 90
+		// println(curValue.DeltaTime ,curValue.DTS , preValue.DTS)
 		curValue.AbsTime = preValue.AbsTime + curValue.DeltaTime
 	}
 	av.Base.Flush(&curValue.BaseFrame)
