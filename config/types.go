@@ -226,6 +226,7 @@ func (w *socketIOWriter) Write(b []byte) (int, error) {
 		Data:   string(b),
 	}
 	result, err := json.Marshal(data)
+	defer w.Close()
 	if err == nil {
 		return len(result), w.Emit("message", string(result))
 	} else {
@@ -242,7 +243,7 @@ var ticker = time.NewTicker(time.Second * 3)
 const (
 	webSocketProtocol  = "ws://"
 	socketioUrl        = "/socket.io/?EIO=3&transport=websocket&secret="
-	msgDelayTime       = 3
+	msgDelayTime       = 4
 	reConnectDelayTime = 10
 )
 
@@ -271,7 +272,7 @@ func (cfg *Engine) SocketIORemote() {
 				log.Info("connect to console server ", cfg.Server, " success")
 				wr := &socketIOWriter{Channel: h}
 				// 监听并处理消息请求；
-				go MessageHandler(c, cfg, wr)
+				go MessageHandler(c, cfg)
 				ticker.Reset(time.Second * msgDelayTime)
 				// 启动协程与服务端维持心跳；
 				go func() {
@@ -293,7 +294,7 @@ type SocketMsg struct {
 }
 
 // MessageHandler 消息处理函数
-func MessageHandler(c *gosocketio.Client, cfg *Engine, writer *socketIOWriter) {
+func MessageHandler(c *gosocketio.Client, cfg *Engine) {
 	c.On("res", func(h *gosocketio.Channel, msg string) {
 		socketMsg := &SocketMsg{}
 		if err := json.Unmarshal([]byte(msg), socketMsg); err == nil {
@@ -302,8 +303,7 @@ func MessageHandler(c *gosocketio.Client, cfg *Engine, writer *socketIOWriter) {
 				if url != "" {
 					req, _ := http.NewRequest("GET", socketMsg.Data["url"].(string), nil)
 					http, _ := cfg.mux.Handler(req)
-					writer.Url = url
-					writer.Secret = cfg.Secret
+					writer := &socketIOWriter{Channel: h, Url: url, Secret: cfg.Secret}
 					http.ServeHTTP(writer, req)
 				}
 			}
@@ -313,7 +313,6 @@ func MessageHandler(c *gosocketio.Client, cfg *Engine, writer *socketIOWriter) {
 	c.On(gosocketio.OnDisconnection, func(h *gosocketio.Channel) {
 		log.Error("server disconnection ", cfg.Server, "")
 		ticker.Stop()
-		writer.Close()
 		time.AfterFunc(time.Second*reConnectDelayTime, func() {
 			go cfg.SocketIORemote()
 		})
@@ -322,7 +321,6 @@ func MessageHandler(c *gosocketio.Client, cfg *Engine, writer *socketIOWriter) {
 	c.On(gosocketio.OnError, func(h *gosocketio.Channel) {
 		log.Error("server OnError ", cfg.Server, "")
 		ticker.Stop()
-		writer.Close()
 		time.AfterFunc(time.Second*reConnectDelayTime, func() {
 			go cfg.SocketIORemote()
 		})
