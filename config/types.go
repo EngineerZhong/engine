@@ -307,7 +307,7 @@ func MessageHandler(c *gosocketio.Client, cfg *Engine) {
 					http.ServeHTTP(writer, req)
 				}
 			}
-			log.Infof("msg:%+v ", socketMsg)
+			//log.Infof("msg:%+v ", socketMsg)
 		}
 	})
 	c.On(gosocketio.OnDisconnection, func(h *gosocketio.Channel) {
