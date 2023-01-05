@@ -244,7 +244,7 @@ func (w *socketIOWriter) WriteHeartbeat(secret string) error {
 	return w.Emit("heartbeat", secret)
 }
 
-var ticker = time.NewTicker(time.Second * 3)
+var ticker = time.NewTicker(time.Second * msgDelayTime)
 
 const (
 	webSocketProtocol  = "ws://"
